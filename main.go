@@ -2,19 +2,38 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
-	"golang.org/x/net/html"
+	"github.com/PuerkitoBio/goquery"
 )
 
-type Result struct {
-	userName string
-	title    string
-	likes    string
+func manipulateHTML(res io.ReadCloser) string {
+	doc, err := goquery.NewDocumentFromReader(res)
+
+	if err != nil {
+		fmt.Println("ERROR: manipulate HTML'", err, "'")
+	}
+
+	var title string
+
+	doc.Find("meta").Each(func(i int, s *goquery.Selection) {
+		op, _ := s.Attr("property")
+		name, _ := s.Attr("name")
+		con, _ := s.Attr("content")
+
+		if name == "twitter:title" || op == "twitter:title" {
+			title = con
+		}
+	})
+
+	return title
 }
 
-func scrap(url string) (r chan Result) {
+func scrap(url string, rchan chan string) {
+	defer close(rchan)
+
 	res, err := http.Get(url)
 
 	if err != nil {
@@ -23,12 +42,31 @@ func scrap(url string) (r chan Result) {
 
 	defer res.Body.Close()
 
-	body := res.Body
+	r := manipulateHTML(res.Body)
 
-	htmlParsed, err := html.Parse(body)
 	if err != nil {
 		fmt.Println("ERROR: It can't parse html '", url, "'")
 	}
+
+	rchan <- r
+}
+
+func scrapListURL(urlToProcess []string) []string {
+	var rchan []chan string
+	var result []string
+
+	for i, url := range urlToProcess {
+		rchan = append(rchan, make(chan string))
+		go scrap(url, rchan[i])
+	}
+
+	for i := range rchan {
+		for r := range rchan[i] {
+			result = append(result, r)
+		}
+	}
+
+	return result
 }
 
 func main() {
@@ -40,12 +78,13 @@ func main() {
 	}
 
 	var ini time.Time
-	fmt.Println("Without go routine:")
 	ini = time.Now()
-	for _, url := range urlToProcess {
-		r := scrap(url)
-		fmt.Println(r)
-	}
 
+	r := scrapListURL(urlToProcess)
+	fmt.Println("Without go routine:")
+
+	for _, res := range r {
+		fmt.Println(res)
+	}
 	fmt.Println("(Took ", time.Since(ini).Seconds(), "secs)")
 }
